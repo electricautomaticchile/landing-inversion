@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Download, LogOut, RefreshCw } from "lucide-react";
+import { Download, FileText, LogOut, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +25,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { SiteLayout } from "@/components/layout/SiteLayout";
 import type { Tables, Enums } from "@/integrations/supabase/types";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 type Lead = Tables<"leads">;
 type LeadType = Enums<"lead_type"> | "all";
@@ -55,6 +57,10 @@ export default function Admin() {
   const { session, isAdmin, loading, signOut, user } = useAuth();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [fetching, setFetching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [pageSize, setPageSize] = useState<number>(50);
+  const [totalCount, setTotalCount] = useState<number>(0);
 
   const [typeFilter, setTypeFilter] = useState<LeadType>("all");
   const [statusFilter, setStatusFilter] = useState<LeadStatus>("all");
@@ -78,25 +84,38 @@ export default function Admin() {
     }
   }, [session, isAdmin, loading, navigate, toast]);
 
-  async function fetchLeads() {
-    setFetching(true);
-    const { data, error } = await supabase
+  async function fetchPage(offset: number, replace: boolean) {
+    if (replace) setFetching(true);
+    else setLoadingMore(true);
+    const { data, error, count } = await supabase
       .from("leads")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(1000);
+      .range(offset, offset + pageSize - 1);
     if (error) {
       toast({ title: "Error al cargar leads", description: error.message, variant: "destructive" });
     } else {
-      setLeads(data ?? []);
+      const next = data ?? [];
+      setLeads((curr) => (replace ? next : [...curr, ...next]));
+      if (typeof count === "number") setTotalCount(count);
+      setHasMore(next.length === pageSize);
     }
     setFetching(false);
+    setLoadingMore(false);
+  }
+
+  function refresh() {
+    fetchPage(0, true);
+  }
+
+  function loadMore() {
+    fetchPage(leads.length, false);
   }
 
   useEffect(() => {
-    if (isAdmin) fetchLeads();
+    if (isAdmin) fetchPage(0, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [isAdmin, pageSize]);
 
   const filtered = useMemo(() => {
     return leads.filter((l) => {
@@ -118,14 +137,14 @@ export default function Admin() {
   }, [leads, typeFilter, statusFilter, from, to, search]);
 
   const counts = useMemo(() => {
-    const c = { total: leads.length, investor: 0, distributor: 0, new: 0 };
+    const c = { total: totalCount || leads.length, investor: 0, distributor: 0, new: 0 };
     for (const l of leads) {
       if (l.type === "investor") c.investor++;
       if (l.type === "distributor") c.distributor++;
       if (l.status === "new") c.new++;
     }
     return c;
-  }, [leads]);
+  }, [leads, totalCount]);
 
   async function updateStatus(id: string, status: Enums<"lead_status">) {
     const previous = leads;
@@ -159,6 +178,65 @@ export default function Admin() {
     URL.revokeObjectURL(url);
   }
 
+  function exportPdf() {
+    const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+    const stamp = new Date();
+    const stampStr = stamp.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" });
+
+    doc.setFontSize(16);
+    doc.text("ElectricAutomaticChile — Leads", 40, 40);
+    doc.setFontSize(10);
+    doc.setTextColor(100);
+    const filterParts = [
+      `Generado: ${stampStr}`,
+      `Tipo: ${typeFilter === "all" ? "Todos" : TYPE_LABEL[typeFilter]}`,
+      `Estado: ${statusFilter === "all" ? "Todos" : STATUS_LABEL[statusFilter]}`,
+      from ? `Desde: ${from}` : null,
+      to ? `Hasta: ${to}` : null,
+      search ? `Búsqueda: "${search}"` : null,
+      `Resultados: ${filtered.length}`,
+    ].filter(Boolean);
+    doc.text(filterParts.join("  ·  "), 40, 58);
+
+    autoTable(doc, {
+      startY: 75,
+      head: [["Fecha", "Tipo", "Estado", "Nombre", "Email", "Organización", "Mensaje"]],
+      body: filtered.map((l) => [
+        new Date(l.created_at).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" }),
+        TYPE_LABEL[l.type],
+        STATUS_LABEL[l.status],
+        l.name,
+        l.email,
+        l.organization ?? "—",
+        l.message ?? "—",
+      ]),
+      styles: { fontSize: 8, cellPadding: 4, overflow: "linebreak" },
+      headStyles: { fillColor: [26, 26, 26], textColor: 255 },
+      alternateRowStyles: { fillColor: [248, 247, 244] },
+      columnStyles: {
+        0: { cellWidth: 75 },
+        1: { cellWidth: 60 },
+        2: { cellWidth: 60 },
+        3: { cellWidth: 90 },
+        4: { cellWidth: 130 },
+        5: { cellWidth: 100 },
+        6: { cellWidth: "auto" },
+      },
+      didDrawPage: (data) => {
+        const page = doc.getNumberOfPages();
+        doc.setFontSize(8);
+        doc.setTextColor(150);
+        doc.text(
+          `Página ${data.pageNumber} de ${page}`,
+          doc.internal.pageSize.getWidth() - 80,
+          doc.internal.pageSize.getHeight() - 20,
+        );
+      },
+    });
+
+    doc.save(`leads-${stamp.toISOString().slice(0, 10)}.pdf`);
+  }
+
   if (loading || !isAdmin) {
     return (
       <SiteLayout>
@@ -178,7 +256,7 @@ export default function Admin() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={fetchLeads} disabled={fetching}>
+            <Button variant="outline" size="sm" onClick={refresh} disabled={fetching}>
               <RefreshCw className={`mr-2 h-4 w-4 ${fetching ? "animate-spin" : ""}`} />
               Actualizar
             </Button>
@@ -231,10 +309,16 @@ export default function Admin() {
                   <SelectItem value="discarded">Descartado</SelectItem>
                 </SelectContent>
               </Select>
-              <Button onClick={exportCsv} className="w-full md:w-auto" disabled={filtered.length === 0}>
-                <Download className="mr-2 h-4 w-4" />
-                Exportar CSV ({filtered.length})
-              </Button>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button onClick={exportCsv} variant="outline" className="w-full sm:w-auto" disabled={filtered.length === 0}>
+                  <Download className="mr-2 h-4 w-4" />
+                  CSV ({filtered.length})
+                </Button>
+                <Button onClick={exportPdf} className="w-full sm:w-auto" disabled={filtered.length === 0}>
+                  <FileText className="mr-2 h-4 w-4" />
+                  PDF ({filtered.length})
+                </Button>
+              </div>
               <div className="md:col-span-2 flex items-center gap-2">
                 <label className="text-sm text-muted-foreground">Desde</label>
                 <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
@@ -313,6 +397,42 @@ export default function Admin() {
             </Table>
           </CardContent>
         </Card>
+
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+          <div className="text-sm text-muted-foreground">
+            Mostrando <span className="text-foreground font-medium">{leads.length}</span> de{" "}
+            <span className="text-foreground font-medium">{totalCount}</span> leads
+            {filtered.length !== leads.length && (
+              <> · <span className="text-foreground font-medium">{filtered.length}</span> tras filtros</>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Por página</span>
+            <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+              <SelectTrigger className="h-9 w-[90px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="25">25</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+                <SelectItem value="250">250</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button onClick={loadMore} disabled={!hasMore || loadingMore || fetching} variant="outline">
+              {loadingMore ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Cargando…
+                </>
+              ) : hasMore ? (
+                "Cargar más"
+              ) : (
+                "No hay más"
+              )}
+            </Button>
+          </div>
+        </div>
       </section>
     </SiteLayout>
   );
