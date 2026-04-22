@@ -100,14 +100,14 @@ export default function Admin() {
     }
   }, [session, isAdmin, loading, navigate, toast]);
 
-  /** Apply current filters to a Supabase query builder. Used for both fetching and exporting. */
+  /**
+   * Apply current filters to a Supabase query builder. Used for both fetching and exporting.
+   * We use `any` internally because the PostgrestFilterBuilder generic chain causes
+   * "Type instantiation is excessively deep" errors when passed through generics.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const applyFilters = useCallback(
-    <Q extends {
-      eq: (col: string, val: string) => Q;
-      gte: (col: string, val: string) => Q;
-      lte: (col: string, val: string) => Q;
-      or: (filters: string) => Q;
-    }>(query: Q): Q => {
+    (query: any): any => {
       let q = query;
       if (typeFilter !== "all") q = q.eq("type", typeFilter);
       if (statusFilter !== "all") q = q.eq("status", statusFilter);
@@ -389,13 +389,30 @@ export default function Admin() {
                 </SelectContent>
               </Select>
               <div className="flex flex-col sm:flex-row gap-2">
-                <Button onClick={exportCsv} variant="outline" className="w-full sm:w-auto" disabled={filtered.length === 0}>
-                  <Download className="mr-2 h-4 w-4" />
-                  CSV ({filtered.length})
+                <Button
+                  onClick={exportCsv}
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  disabled={totalCount === 0 || exporting !== null}
+                >
+                  {exporting === "csv" ? (
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="mr-2 h-4 w-4" />
+                  )}
+                  CSV ({totalCount})
                 </Button>
-                <Button onClick={exportPdf} className="w-full sm:w-auto" disabled={filtered.length === 0}>
-                  <FileText className="mr-2 h-4 w-4" />
-                  PDF ({filtered.length})
+                <Button
+                  onClick={exportPdf}
+                  className="w-full sm:w-auto"
+                  disabled={totalCount === 0 || exporting !== null}
+                >
+                  {exporting === "pdf" ? (
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileText className="mr-2 h-4 w-4" />
+                  )}
+                  PDF ({totalCount})
                 </Button>
               </div>
               <div className="md:col-span-2 flex items-center gap-2">
@@ -423,14 +440,14 @@ export default function Admin() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.length === 0 && (
+                {leads.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
                       {fetching ? "Cargando…" : "Sin resultados con los filtros actuales."}
                     </TableCell>
                   </TableRow>
                 )}
-                {filtered.map((l) => (
+                {leads.map((l) => (
                   <TableRow key={l.id}>
                     <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
                       {new Date(l.created_at).toLocaleString("es-CL", {
@@ -480,10 +497,7 @@ export default function Admin() {
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
           <div className="text-sm text-muted-foreground">
             Mostrando <span className="text-foreground font-medium">{leads.length}</span> de{" "}
-            <span className="text-foreground font-medium">{totalCount}</span> leads
-            {filtered.length !== leads.length && (
-              <> · <span className="text-foreground font-medium">{filtered.length}</span> tras filtros</>
-            )}
+            <span className="text-foreground font-medium">{totalCount}</span> leads filtrados
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">Por página</span>
