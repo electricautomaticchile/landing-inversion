@@ -23,6 +23,7 @@ export type Database = {
           message: string | null
           name: string
           organization: string | null
+          status: Database["public"]["Enums"]["lead_status"]
           type: Database["public"]["Enums"]["lead_type"]
         }
         Insert: {
@@ -33,6 +34,7 @@ export type Database = {
           message?: string | null
           name: string
           organization?: string | null
+          status?: Database["public"]["Enums"]["lead_status"]
           type: Database["public"]["Enums"]["lead_type"]
         }
         Update: {
@@ -43,6 +45,7 @@ export type Database = {
           message?: string | null
           name?: string
           organization?: string | null
+          status?: Database["public"]["Enums"]["lead_status"]
           type?: Database["public"]["Enums"]["lead_type"]
         }
         Relationships: []
@@ -83,6 +86,7 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "user"
+      lead_status: "new" | "contacted" | "qualified" | "discarded"
       lead_type: "investor" | "distributor"
     }
     CompositeTypes: {
@@ -212,6 +216,7 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "user"],
+      lead_status: ["new", "contacted", "qualified", "discarded"],
       lead_type: ["investor", "distributor"],
     },
   },
