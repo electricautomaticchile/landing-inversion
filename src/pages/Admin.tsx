@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Download, LogOut, RefreshCw } from "lucide-react";
+import { Download, FileText, LogOut, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +25,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { SiteLayout } from "@/components/layout/SiteLayout";
 import type { Tables, Enums } from "@/integrations/supabase/types";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 type Lead = Tables<"leads">;
 type LeadType = Enums<"lead_type"> | "all";
@@ -55,6 +57,10 @@ export default function Admin() {
   const { session, isAdmin, loading, signOut, user } = useAuth();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [fetching, setFetching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [pageSize, setPageSize] = useState<number>(50);
+  const [totalCount, setTotalCount] = useState<number>(0);
 
   const [typeFilter, setTypeFilter] = useState<LeadType>("all");
   const [statusFilter, setStatusFilter] = useState<LeadStatus>("all");
@@ -78,25 +84,38 @@ export default function Admin() {
     }
   }, [session, isAdmin, loading, navigate, toast]);
 
-  async function fetchLeads() {
-    setFetching(true);
-    const { data, error } = await supabase
+  async function fetchPage(offset: number, replace: boolean) {
+    if (replace) setFetching(true);
+    else setLoadingMore(true);
+    const { data, error, count } = await supabase
       .from("leads")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(1000);
+      .range(offset, offset + pageSize - 1);
     if (error) {
       toast({ title: "Error al cargar leads", description: error.message, variant: "destructive" });
     } else {
-      setLeads(data ?? []);
+      const next = data ?? [];
+      setLeads((curr) => (replace ? next : [...curr, ...next]));
+      if (typeof count === "number") setTotalCount(count);
+      setHasMore(next.length === pageSize);
     }
     setFetching(false);
+    setLoadingMore(false);
+  }
+
+  function refresh() {
+    fetchPage(0, true);
+  }
+
+  function loadMore() {
+    fetchPage(leads.length, false);
   }
 
   useEffect(() => {
-    if (isAdmin) fetchLeads();
+    if (isAdmin) fetchPage(0, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [isAdmin, pageSize]);
 
   const filtered = useMemo(() => {
     return leads.filter((l) => {
