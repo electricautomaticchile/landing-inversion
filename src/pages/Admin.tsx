@@ -309,10 +309,16 @@ export default function Admin() {
                   <SelectItem value="discarded">Descartado</SelectItem>
                 </SelectContent>
               </Select>
-              <Button onClick={exportCsv} className="w-full md:w-auto" disabled={filtered.length === 0}>
-                <Download className="mr-2 h-4 w-4" />
-                Exportar CSV ({filtered.length})
-              </Button>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button onClick={exportCsv} variant="outline" className="w-full sm:w-auto" disabled={filtered.length === 0}>
+                  <Download className="mr-2 h-4 w-4" />
+                  CSV ({filtered.length})
+                </Button>
+                <Button onClick={exportPdf} className="w-full sm:w-auto" disabled={filtered.length === 0}>
+                  <FileText className="mr-2 h-4 w-4" />
+                  PDF ({filtered.length})
+                </Button>
+              </div>
               <div className="md:col-span-2 flex items-center gap-2">
                 <label className="text-sm text-muted-foreground">Desde</label>
                 <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
@@ -391,6 +397,42 @@ export default function Admin() {
             </Table>
           </CardContent>
         </Card>
+
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+          <div className="text-sm text-muted-foreground">
+            Mostrando <span className="text-foreground font-medium">{leads.length}</span> de{" "}
+            <span className="text-foreground font-medium">{totalCount}</span> leads
+            {filtered.length !== leads.length && (
+              <> · <span className="text-foreground font-medium">{filtered.length}</span> tras filtros</>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Por página</span>
+            <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+              <SelectTrigger className="h-9 w-[90px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="25">25</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+                <SelectItem value="250">250</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button onClick={loadMore} disabled={!hasMore || loadingMore || fetching} variant="outline">
+              {loadingMore ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Cargando…
+                </>
+              ) : hasMore ? (
+                "Cargar más"
+              ) : (
+                "No hay más"
+              )}
+            </Button>
+          </div>
+        </div>
       </section>
     </SiteLayout>
   );
