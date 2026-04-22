@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Download, FileText, LogOut, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,14 @@ import autoTable from "jspdf-autotable";
 type Lead = Tables<"leads">;
 type LeadType = Enums<"lead_type"> | "all";
 type LeadStatus = Enums<"lead_status"> | "all";
+
+const EXPORT_BATCH_SIZE = 1000;
+const ESCAPE_PG_RE = /[%,()\\]/g;
+
+/** Escape characters that have special meaning inside a PostgREST `or()` filter value. */
+function escapeForPgrstOr(value: string): string {
+  return value.replace(ESCAPE_PG_RE, "\\$&");
+}
 
 const STATUS_LABEL: Record<Enums<"lead_status">, string> = {
   new: "Nuevo",
@@ -67,6 +75,14 @@ export default function Admin() {
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [exporting, setExporting] = useState<null | "csv" | "pdf">(null);
+
+  // Debounce search so we don't hit the DB on every keystroke
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
 
   useEffect(() => {
     if (loading) return;
@@ -84,60 +100,81 @@ export default function Admin() {
     }
   }, [session, isAdmin, loading, navigate, toast]);
 
-  async function fetchPage(offset: number, replace: boolean) {
-    if (replace) setFetching(true);
-    else setLoadingMore(true);
-    const { data, error, count } = await supabase
-      .from("leads")
-      .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range(offset, offset + pageSize - 1);
-    if (error) {
-      toast({ title: "Error al cargar leads", description: error.message, variant: "destructive" });
-    } else {
-      const next = data ?? [];
-      setLeads((curr) => (replace ? next : [...curr, ...next]));
-      if (typeof count === "number") setTotalCount(count);
-      setHasMore(next.length === pageSize);
-    }
-    setFetching(false);
-    setLoadingMore(false);
-  }
-
-  function refresh() {
-    fetchPage(0, true);
-  }
-
-  function loadMore() {
-    fetchPage(leads.length, false);
-  }
-
-  useEffect(() => {
-    if (isAdmin) fetchPage(0, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin, pageSize]);
-
-  const filtered = useMemo(() => {
-    return leads.filter((l) => {
-      if (typeFilter !== "all" && l.type !== typeFilter) return false;
-      if (statusFilter !== "all" && l.status !== statusFilter) return false;
-      if (from && new Date(l.created_at) < new Date(from)) return false;
+  /**
+   * Apply current filters to a Supabase query builder. Used for both fetching and exporting.
+   * We use `any` internally because the PostgrestFilterBuilder generic chain causes
+   * "Type instantiation is excessively deep" errors when passed through generics.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const applyFilters = useCallback(
+    (query: any): any => {
+      let q = query;
+      if (typeFilter !== "all") q = q.eq("type", typeFilter);
+      if (statusFilter !== "all") q = q.eq("status", statusFilter);
+      if (from) q = q.gte("created_at", new Date(from).toISOString());
       if (to) {
         const end = new Date(to);
         end.setHours(23, 59, 59, 999);
-        if (new Date(l.created_at) > end) return false;
+        q = q.lte("created_at", end.toISOString());
       }
-      if (search) {
-        const s = search.toLowerCase();
-        const haystack = `${l.name} ${l.email} ${l.organization ?? ""} ${l.message ?? ""}`.toLowerCase();
-        if (!haystack.includes(s)) return false;
+      if (debouncedSearch) {
+        const safe = escapeForPgrstOr(debouncedSearch);
+        q = q.or(
+          `name.ilike.%${safe}%,email.ilike.%${safe}%,organization.ilike.%${safe}%,message.ilike.%${safe}%`,
+        );
       }
-      return true;
-    });
-  }, [leads, typeFilter, statusFilter, from, to, search]);
+      return q;
+    },
+    [typeFilter, statusFilter, from, to, debouncedSearch],
+  );
 
+  // Track latest request to avoid race conditions when filters change quickly
+  const requestIdRef = useRef(0);
+
+  const fetchPage = useCallback(
+    async (offset: number, replace: boolean) => {
+      const reqId = ++requestIdRef.current;
+      if (replace) setFetching(true);
+      else setLoadingMore(true);
+      const base = supabase
+        .from("leads")
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      const { data, error, count } = await applyFilters(base);
+      // Discard stale responses
+      if (reqId !== requestIdRef.current) return;
+      if (error) {
+        toast({ title: "Error al cargar leads", description: error.message, variant: "destructive" });
+      } else {
+        const next = data ?? [];
+        setLeads((curr) => (replace ? next : [...curr, ...next]));
+        if (typeof count === "number") setTotalCount(count);
+        setHasMore(next.length === pageSize);
+      }
+      setFetching(false);
+      setLoadingMore(false);
+    },
+    [applyFilters, pageSize, toast],
+  );
+
+  const refresh = useCallback(() => {
+    fetchPage(0, true);
+  }, [fetchPage]);
+
+  const loadMore = useCallback(() => {
+    fetchPage(leads.length, false);
+  }, [fetchPage, leads.length]);
+
+  // Reload from offset 0 whenever filters or page size change
+  useEffect(() => {
+    if (isAdmin) fetchPage(0, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, pageSize, typeFilter, statusFilter, from, to, debouncedSearch]);
+
+  // Filtering happens server-side; `leads` already only contains matching rows.
   const counts = useMemo(() => {
-    const c = { total: totalCount || leads.length, investor: 0, distributor: 0, new: 0 };
+    const c = { total: totalCount, investor: 0, distributor: 0, new: 0 };
     for (const l of leads) {
       if (l.type === "investor") c.investor++;
       if (l.type === "distributor") c.distributor++;
@@ -156,85 +193,127 @@ export default function Admin() {
     }
   }
 
-  function exportCsv() {
-    const headers = ["created_at", "type", "status", "name", "email", "organization", "message", "extra"];
-    const escape = (v: unknown) => {
-      const s = v === null || v === undefined ? "" : typeof v === "string" ? v : JSON.stringify(v);
-      return `"${s.replace(/"/g, '""')}"`;
-    };
-    const rows = filtered.map((l) =>
-      [l.created_at, l.type, l.status, l.name, l.email, l.organization, l.message, l.extra]
-        .map(escape)
-        .join(","),
-    );
-    const csv = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const stamp = new Date().toISOString().slice(0, 10);
-    a.href = url;
-    a.download = `leads-${stamp}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  /** Fetch ALL rows matching current filters from the server, in batches of 1000. */
+  async function fetchAllFiltered(): Promise<Lead[] | null> {
+    const all: Lead[] = [];
+    let offset = 0;
+    // Safety cap to avoid runaway exports
+    const MAX_ROWS = 50_000;
+    while (offset < MAX_ROWS) {
+      const base = supabase
+        .from("leads")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(offset, offset + EXPORT_BATCH_SIZE - 1);
+      const { data, error } = await applyFilters(base);
+      if (error) {
+        toast({ title: "Error al exportar", description: error.message, variant: "destructive" });
+        return null;
+      }
+      const batch = data ?? [];
+      all.push(...batch);
+      if (batch.length < EXPORT_BATCH_SIZE) break;
+      offset += EXPORT_BATCH_SIZE;
+    }
+    return all;
   }
 
-  function exportPdf() {
-    const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-    const stamp = new Date();
-    const stampStr = stamp.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" });
+  async function exportCsv() {
+    setExporting("csv");
+    try {
+      const rows = await fetchAllFiltered();
+      if (!rows) return;
+      const headers = ["created_at", "type", "status", "name", "email", "organization", "message", "extra"];
+      const escape = (v: unknown) => {
+        const s = v === null || v === undefined ? "" : typeof v === "string" ? v : JSON.stringify(v);
+        return `"${s.replace(/"/g, '""')}"`;
+      };
+      const body = rows.map((l) =>
+        [l.created_at, l.type, l.status, l.name, l.email, l.organization, l.message, l.extra]
+          .map(escape)
+          .join(","),
+      );
+      const csv = [headers.join(","), ...body].join("\n");
+      const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `leads-${stamp}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "CSV generado", description: `${rows.length} registros exportados.` });
+    } finally {
+      setExporting(null);
+    }
+  }
 
-    doc.setFontSize(16);
-    doc.text("ElectricAutomaticChile — Leads", 40, 40);
-    doc.setFontSize(10);
-    doc.setTextColor(100);
-    const filterParts = [
-      `Generado: ${stampStr}`,
-      `Tipo: ${typeFilter === "all" ? "Todos" : TYPE_LABEL[typeFilter]}`,
-      `Estado: ${statusFilter === "all" ? "Todos" : STATUS_LABEL[statusFilter]}`,
-      from ? `Desde: ${from}` : null,
-      to ? `Hasta: ${to}` : null,
-      search ? `Búsqueda: "${search}"` : null,
-      `Resultados: ${filtered.length}`,
-    ].filter(Boolean);
-    doc.text(filterParts.join("  ·  "), 40, 58);
+  async function exportPdf() {
+    setExporting("pdf");
+    try {
+      const rows = await fetchAllFiltered();
+      if (!rows) return;
 
-    autoTable(doc, {
-      startY: 75,
-      head: [["Fecha", "Tipo", "Estado", "Nombre", "Email", "Organización", "Mensaje"]],
-      body: filtered.map((l) => [
-        new Date(l.created_at).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" }),
-        TYPE_LABEL[l.type],
-        STATUS_LABEL[l.status],
-        l.name,
-        l.email,
-        l.organization ?? "—",
-        l.message ?? "—",
-      ]),
-      styles: { fontSize: 8, cellPadding: 4, overflow: "linebreak" },
-      headStyles: { fillColor: [26, 26, 26], textColor: 255 },
-      alternateRowStyles: { fillColor: [248, 247, 244] },
-      columnStyles: {
-        0: { cellWidth: 75 },
-        1: { cellWidth: 60 },
-        2: { cellWidth: 60 },
-        3: { cellWidth: 90 },
-        4: { cellWidth: 130 },
-        5: { cellWidth: 100 },
-        6: { cellWidth: "auto" },
-      },
-      didDrawPage: (data) => {
-        const page = doc.getNumberOfPages();
-        doc.setFontSize(8);
-        doc.setTextColor(150);
-        doc.text(
-          `Página ${data.pageNumber} de ${page}`,
-          doc.internal.pageSize.getWidth() - 80,
-          doc.internal.pageSize.getHeight() - 20,
-        );
-      },
-    });
+      const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+      const stamp = new Date();
+      const stampStr = stamp.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" });
 
-    doc.save(`leads-${stamp.toISOString().slice(0, 10)}.pdf`);
+      doc.setFontSize(16);
+      doc.text("ElectricAutomaticChile — Leads", 40, 40);
+      doc.setFontSize(10);
+      doc.setTextColor(100);
+      const filterParts = [
+        `Generado: ${stampStr}`,
+        `Tipo: ${typeFilter === "all" ? "Todos" : TYPE_LABEL[typeFilter]}`,
+        `Estado: ${statusFilter === "all" ? "Todos" : STATUS_LABEL[statusFilter]}`,
+        from ? `Desde: ${from}` : null,
+        to ? `Hasta: ${to}` : null,
+        debouncedSearch ? `Búsqueda: "${debouncedSearch}"` : null,
+        `Resultados: ${rows.length}`,
+      ].filter(Boolean);
+      doc.text(filterParts.join("  ·  "), 40, 58);
+
+      autoTable(doc, {
+        startY: 75,
+        head: [["Fecha", "Tipo", "Estado", "Nombre", "Email", "Organización", "Mensaje"]],
+        body: rows.map((l) => [
+          new Date(l.created_at).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" }),
+          TYPE_LABEL[l.type],
+          STATUS_LABEL[l.status],
+          l.name,
+          l.email,
+          l.organization ?? "—",
+          l.message ?? "—",
+        ]),
+        styles: { fontSize: 8, cellPadding: 4, overflow: "linebreak" },
+        headStyles: { fillColor: [26, 26, 26], textColor: 255 },
+        alternateRowStyles: { fillColor: [248, 247, 244] },
+        columnStyles: {
+          0: { cellWidth: 75 },
+          1: { cellWidth: 60 },
+          2: { cellWidth: 60 },
+          3: { cellWidth: 90 },
+          4: { cellWidth: 130 },
+          5: { cellWidth: 100 },
+          6: { cellWidth: "auto" },
+        },
+        didDrawPage: (data) => {
+          const page = doc.getNumberOfPages();
+          doc.setFontSize(8);
+          doc.setTextColor(150);
+          doc.text(
+            `Página ${data.pageNumber} de ${page}`,
+            doc.internal.pageSize.getWidth() - 80,
+            doc.internal.pageSize.getHeight() - 20,
+          );
+        },
+      });
+
+      doc.save(`leads-${stamp.toISOString().slice(0, 10)}.pdf`);
+      toast({ title: "PDF generado", description: `${rows.length} registros exportados.` });
+    } finally {
+      setExporting(null);
+    }
   }
 
   if (loading || !isAdmin) {
@@ -310,13 +389,30 @@ export default function Admin() {
                 </SelectContent>
               </Select>
               <div className="flex flex-col sm:flex-row gap-2">
-                <Button onClick={exportCsv} variant="outline" className="w-full sm:w-auto" disabled={filtered.length === 0}>
-                  <Download className="mr-2 h-4 w-4" />
-                  CSV ({filtered.length})
+                <Button
+                  onClick={exportCsv}
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  disabled={totalCount === 0 || exporting !== null}
+                >
+                  {exporting === "csv" ? (
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="mr-2 h-4 w-4" />
+                  )}
+                  CSV ({totalCount})
                 </Button>
-                <Button onClick={exportPdf} className="w-full sm:w-auto" disabled={filtered.length === 0}>
-                  <FileText className="mr-2 h-4 w-4" />
-                  PDF ({filtered.length})
+                <Button
+                  onClick={exportPdf}
+                  className="w-full sm:w-auto"
+                  disabled={totalCount === 0 || exporting !== null}
+                >
+                  {exporting === "pdf" ? (
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileText className="mr-2 h-4 w-4" />
+                  )}
+                  PDF ({totalCount})
                 </Button>
               </div>
               <div className="md:col-span-2 flex items-center gap-2">
@@ -344,14 +440,14 @@ export default function Admin() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.length === 0 && (
+                {leads.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
                       {fetching ? "Cargando…" : "Sin resultados con los filtros actuales."}
                     </TableCell>
                   </TableRow>
                 )}
-                {filtered.map((l) => (
+                {leads.map((l) => (
                   <TableRow key={l.id}>
                     <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
                       {new Date(l.created_at).toLocaleString("es-CL", {
@@ -401,10 +497,7 @@ export default function Admin() {
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
           <div className="text-sm text-muted-foreground">
             Mostrando <span className="text-foreground font-medium">{leads.length}</span> de{" "}
-            <span className="text-foreground font-medium">{totalCount}</span> leads
-            {filtered.length !== leads.length && (
-              <> · <span className="text-foreground font-medium">{filtered.length}</span> tras filtros</>
-            )}
+            <span className="text-foreground font-medium">{totalCount}</span> leads filtrados
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">Por página</span>
