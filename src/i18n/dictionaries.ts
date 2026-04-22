@@ -637,17 +637,6 @@ export const es = {
     fetchError: "Error al cargar leads",
     locale: "es-CL",
   },
-} satisfies DictionaryShape;
-
-/**
- * Helper type alias used only to validate the shape of `es` without forcing literal types.
- * `Dictionary` (below) is the type all consumers should use.
- */
-type DictionaryShape = typeof esShape;
-declare const esShape: {
-  brand: { name: string; tagline: string; contactEmail: string; location: string };
-  // Intentionally loose — we mirror the runtime structure with `Dictionary = typeof es` below.
-  [k: string]: unknown;
 };
 
 /**
