@@ -98,7 +98,7 @@ export const Navbar = () => {
                   </Button>
                 </span>
               </TooltipTrigger>
-              <TooltipContent>{es.nav.languageTooltip}</TooltipContent>
+              <TooltipContent>{es.nav.languageLabel}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
           <Button asChild size="sm" className="bg-foreground text-background hover:bg-foreground/90">
