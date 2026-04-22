@@ -1,6 +1,6 @@
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { Menu, X } from "lucide-react";
+import { Menu, X, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/tooltip";
 import logo from "@/assets/logo.png";
 import { es } from "@/i18n/es";
+import { useAuth } from "@/hooks/useAuth";
 
 const links = [
   { to: "/", label: es.nav.home },
@@ -21,6 +22,7 @@ export const Navbar = () => {
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const { pathname } = useLocation();
+  const { isAdmin } = useAuth();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -73,6 +75,14 @@ export const Navbar = () => {
         </nav>
 
         <div className="hidden md:flex items-center gap-2">
+          {isAdmin && (
+            <Button asChild size="sm" variant="outline">
+              <Link to="/admin">
+                <LayoutDashboard className="mr-2 h-4 w-4" />
+                Panel
+              </Link>
+            </Button>
+          )}
           <TooltipProvider delayDuration={150}>
             <Tooltip>
               <TooltipTrigger asChild>
