@@ -137,14 +137,14 @@ export default function Admin() {
   }, [leads, typeFilter, statusFilter, from, to, search]);
 
   const counts = useMemo(() => {
-    const c = { total: leads.length, investor: 0, distributor: 0, new: 0 };
+    const c = { total: totalCount || leads.length, investor: 0, distributor: 0, new: 0 };
     for (const l of leads) {
       if (l.type === "investor") c.investor++;
       if (l.type === "distributor") c.distributor++;
       if (l.status === "new") c.new++;
     }
     return c;
-  }, [leads]);
+  }, [leads, totalCount]);
 
   async function updateStatus(id: string, status: Enums<"lead_status">) {
     const previous = leads;
@@ -178,6 +178,65 @@ export default function Admin() {
     URL.revokeObjectURL(url);
   }
 
+  function exportPdf() {
+    const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+    const stamp = new Date();
+    const stampStr = stamp.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" });
+
+    doc.setFontSize(16);
+    doc.text("ElectricAutomaticChile — Leads", 40, 40);
+    doc.setFontSize(10);
+    doc.setTextColor(100);
+    const filterParts = [
+      `Generado: ${stampStr}`,
+      `Tipo: ${typeFilter === "all" ? "Todos" : TYPE_LABEL[typeFilter]}`,
+      `Estado: ${statusFilter === "all" ? "Todos" : STATUS_LABEL[statusFilter]}`,
+      from ? `Desde: ${from}` : null,
+      to ? `Hasta: ${to}` : null,
+      search ? `Búsqueda: "${search}"` : null,
+      `Resultados: ${filtered.length}`,
+    ].filter(Boolean);
+    doc.text(filterParts.join("  ·  "), 40, 58);
+
+    autoTable(doc, {
+      startY: 75,
+      head: [["Fecha", "Tipo", "Estado", "Nombre", "Email", "Organización", "Mensaje"]],
+      body: filtered.map((l) => [
+        new Date(l.created_at).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" }),
+        TYPE_LABEL[l.type],
+        STATUS_LABEL[l.status],
+        l.name,
+        l.email,
+        l.organization ?? "—",
+        l.message ?? "—",
+      ]),
+      styles: { fontSize: 8, cellPadding: 4, overflow: "linebreak" },
+      headStyles: { fillColor: [26, 26, 26], textColor: 255 },
+      alternateRowStyles: { fillColor: [248, 247, 244] },
+      columnStyles: {
+        0: { cellWidth: 75 },
+        1: { cellWidth: 60 },
+        2: { cellWidth: 60 },
+        3: { cellWidth: 90 },
+        4: { cellWidth: 130 },
+        5: { cellWidth: 100 },
+        6: { cellWidth: "auto" },
+      },
+      didDrawPage: (data) => {
+        const page = doc.getNumberOfPages();
+        doc.setFontSize(8);
+        doc.setTextColor(150);
+        doc.text(
+          `Página ${data.pageNumber} de ${page}`,
+          doc.internal.pageSize.getWidth() - 80,
+          doc.internal.pageSize.getHeight() - 20,
+        );
+      },
+    });
+
+    doc.save(`leads-${stamp.toISOString().slice(0, 10)}.pdf`);
+  }
+
   if (loading || !isAdmin) {
     return (
       <SiteLayout>
@@ -197,7 +256,7 @@ export default function Admin() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={fetchLeads} disabled={fetching}>
+            <Button variant="outline" size="sm" onClick={refresh} disabled={fetching}>
               <RefreshCw className={`mr-2 h-4 w-4 ${fetching ? "animate-spin" : ""}`} />
               Actualizar
             </Button>
