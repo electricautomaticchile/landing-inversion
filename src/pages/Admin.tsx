@@ -31,6 +31,17 @@ import autoTable from "jspdf-autotable";
 type Lead = Tables<"leads">;
 type LeadType = Enums<"lead_type"> | "all";
 type LeadStatus = Enums<"lead_status"> | "all";
+type LeadsQueryResult = {
+  data: Lead[] | null;
+  error: { message: string } | null;
+  count: number | null;
+};
+type FilterableLeadsQuery = PromiseLike<LeadsQueryResult> & {
+  eq: (column: string, value: string) => FilterableLeadsQuery;
+  gte: (column: string, value: string) => FilterableLeadsQuery;
+  lte: (column: string, value: string) => FilterableLeadsQuery;
+  or: (filters: string) => FilterableLeadsQuery;
+};
 
 const EXPORT_BATCH_SIZE = 1000;
 const ESCAPE_PG_RE = /[%,()\\]/g;
@@ -100,14 +111,8 @@ export default function Admin() {
     }
   }, [session, isAdmin, loading, navigate, toast]);
 
-  /**
-   * Apply current filters to a Supabase query builder. Used for both fetching and exporting.
-   * We use `any` internally because the PostgrestFilterBuilder generic chain causes
-   * "Type instantiation is excessively deep" errors when passed through generics.
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const applyFilters = useCallback(
-    (query: any): any => {
+    (query: FilterableLeadsQuery): FilterableLeadsQuery => {
       let q = query;
       if (typeFilter !== "all") q = q.eq("type", typeFilter);
       if (statusFilter !== "all") q = q.eq("status", statusFilter);
@@ -141,7 +146,7 @@ export default function Admin() {
         .select("*", { count: "exact" })
         .order("created_at", { ascending: false })
         .range(offset, offset + pageSize - 1);
-      const { data, error, count } = await applyFilters(base);
+      const { data, error, count } = await applyFilters(base as FilterableLeadsQuery);
       // Discard stale responses
       if (reqId !== requestIdRef.current) return;
       if (error) {
@@ -205,7 +210,7 @@ export default function Admin() {
         .select("*")
         .order("created_at", { ascending: false })
         .range(offset, offset + EXPORT_BATCH_SIZE - 1);
-      const { data, error } = await applyFilters(base);
+      const { data, error } = await applyFilters(base as FilterableLeadsQuery);
       if (error) {
         toast({ title: "Error al exportar", description: error.message, variant: "destructive" });
         return null;
