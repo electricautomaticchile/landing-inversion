@@ -2,12 +2,6 @@ import { Link, NavLink, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Menu, X, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import logo from "@/assets/logo.png";
 import { es } from "@/i18n/es";
 import { useAuth } from "@/hooks/useAuth";
@@ -83,24 +77,6 @@ export const Navbar = () => {
               </Link>
             </Button>
           )}
-          <TooltipProvider delayDuration={150}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span tabIndex={0}>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled
-                    aria-label="Cambiar idioma"
-                    className="opacity-70"
-                  >
-                    ES / EN
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>{es.nav.languageLabel}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
           <Button asChild size="sm" className="bg-foreground text-background hover:bg-foreground/90">
             <a href={`mailto:${es.brand.contactEmail}`}>Contacto</a>
           </Button>
