@@ -21,51 +21,38 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { SiteLayout } from "@/components/layout/SiteLayout";
-import type { Tables, Enums } from "@/integrations/supabase/types";
+import {
+  type Lead,
+  type LeadStatus,
+  type LeadType,
+  fetchLeads,
+  updateLeadStatus,
+} from "@/lib/api/client";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-type Lead = Tables<"leads">;
-type LeadType = Enums<"lead_type"> | "all";
-type LeadStatus = Enums<"lead_status"> | "all";
-type LeadsQueryResult = {
-  data: Lead[] | null;
-  error: { message: string } | null;
-  count: number | null;
-};
-type FilterableLeadsQuery = PromiseLike<LeadsQueryResult> & {
-  eq: (column: string, value: string) => FilterableLeadsQuery;
-  gte: (column: string, value: string) => FilterableLeadsQuery;
-  lte: (column: string, value: string) => FilterableLeadsQuery;
-  or: (filters: string) => FilterableLeadsQuery;
-};
+type LeadTypeFilter = LeadType | "all";
+type LeadStatusFilter = LeadStatus | "all";
 
 const EXPORT_BATCH_SIZE = 1000;
-const ESCAPE_PG_RE = /[%,()\\]/g;
 
-/** Escape characters that have special meaning inside a PostgREST `or()` filter value. */
-function escapeForPgrstOr(value: string): string {
-  return value.replace(ESCAPE_PG_RE, "\\$&");
-}
-
-const STATUS_LABEL: Record<Enums<"lead_status">, string> = {
+const STATUS_LABEL: Record<LeadStatus, string> = {
   new: "Nuevo",
   contacted: "Contactado",
   qualified: "Calificado",
   discarded: "Descartado",
 };
 
-const STATUS_VARIANT: Record<Enums<"lead_status">, "default" | "secondary" | "outline" | "destructive"> = {
+const STATUS_VARIANT: Record<LeadStatus, "default" | "secondary" | "outline" | "destructive"> = {
   new: "default",
   contacted: "secondary",
   qualified: "outline",
   discarded: "destructive",
 };
 
-const TYPE_LABEL: Record<Enums<"lead_type">, string> = {
+const TYPE_LABEL: Record<LeadType, string> = {
   investor: "Inversor",
   distributor: "Distribuidora",
 };
@@ -81,15 +68,14 @@ export default function Admin() {
   const [pageSize, setPageSize] = useState<number>(50);
   const [totalCount, setTotalCount] = useState<number>(0);
 
-  const [typeFilter, setTypeFilter] = useState<LeadType>("all");
-  const [statusFilter, setStatusFilter] = useState<LeadStatus>("all");
+  const [typeFilter, setTypeFilter] = useState<LeadTypeFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<LeadStatusFilter>("all");
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [exporting, setExporting] = useState<null | "csv" | "pdf">(null);
 
-  // Debounce search so we don't hit the DB on every keystroke
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
     return () => clearTimeout(t);
@@ -104,36 +90,24 @@ export default function Admin() {
     if (!isAdmin) {
       toast({
         title: "Acceso restringido",
-        description: "Tu cuenta no tiene permisos de administrador.",
+        description: "Tu cuenta no tiene permisos para ver leads.",
         variant: "destructive",
       });
       navigate("/", { replace: true });
     }
   }, [session, isAdmin, loading, navigate, toast]);
 
-  const applyFilters = useCallback(
-    (query: FilterableLeadsQuery): FilterableLeadsQuery => {
-      let q = query;
-      if (typeFilter !== "all") q = q.eq("type", typeFilter);
-      if (statusFilter !== "all") q = q.eq("status", statusFilter);
-      if (from) q = q.gte("created_at", new Date(from).toISOString());
-      if (to) {
-        const end = new Date(to);
-        end.setHours(23, 59, 59, 999);
-        q = q.lte("created_at", end.toISOString());
-      }
-      if (debouncedSearch) {
-        const safe = escapeForPgrstOr(debouncedSearch);
-        q = q.or(
-          `name.ilike.%${safe}%,email.ilike.%${safe}%,organization.ilike.%${safe}%,message.ilike.%${safe}%`,
-        );
-      }
-      return q;
-    },
+  const currentFilters = useCallback(
+    () => ({
+      type: typeFilter === "all" ? undefined : typeFilter,
+      status: statusFilter === "all" ? undefined : statusFilter,
+      from: from || undefined,
+      to: to || undefined,
+      search: debouncedSearch || undefined,
+    }),
     [typeFilter, statusFilter, from, to, debouncedSearch],
   );
 
-  // Track latest request to avoid race conditions when filters change quickly
   const requestIdRef = useRef(0);
 
   const fetchPage = useCallback(
@@ -141,26 +115,29 @@ export default function Admin() {
       const reqId = ++requestIdRef.current;
       if (replace) setFetching(true);
       else setLoadingMore(true);
-      const base = supabase
-        .from("leads")
-        .select("*", { count: "exact" })
-        .order("created_at", { ascending: false })
-        .range(offset, offset + pageSize - 1);
-      const { data, error, count } = await applyFilters(base as FilterableLeadsQuery);
-      // Discard stale responses
-      if (reqId !== requestIdRef.current) return;
-      if (error) {
-        toast({ title: "Error al cargar leads", description: error.message, variant: "destructive" });
-      } else {
-        const next = data ?? [];
-        setLeads((curr) => (replace ? next : [...curr, ...next]));
-        if (typeof count === "number") setTotalCount(count);
-        setHasMore(next.length === pageSize);
+
+      try {
+        const data = await fetchLeads({
+          ...currentFilters(),
+          offset,
+          limit: pageSize,
+        });
+        if (reqId !== requestIdRef.current) return;
+        setLeads((curr) => (replace ? data.items : [...curr, ...data.items]));
+        setTotalCount(data.total);
+        setHasMore(data.hasMore);
+      } catch (err: unknown) {
+        if (reqId !== requestIdRef.current) return;
+        const message = err instanceof Error ? err.message : "Error al cargar leads";
+        toast({ title: "Error al cargar leads", description: message, variant: "destructive" });
+      } finally {
+        if (reqId === requestIdRef.current) {
+          setFetching(false);
+          setLoadingMore(false);
+        }
       }
-      setFetching(false);
-      setLoadingMore(false);
     },
-    [applyFilters, pageSize, toast],
+    [currentFilters, pageSize, toast],
   );
 
   const refresh = useCallback(() => {
@@ -171,13 +148,10 @@ export default function Admin() {
     fetchPage(leads.length, false);
   }, [fetchPage, leads.length]);
 
-  // Reload from offset 0 whenever filters or page size change
   useEffect(() => {
     if (isAdmin) fetchPage(0, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin, pageSize, typeFilter, statusFilter, from, to, debouncedSearch]);
+  }, [isAdmin, fetchPage]);
 
-  // Filtering happens server-side; `leads` already only contains matching rows.
   const counts = useMemo(() => {
     const c = { total: totalCount, investor: 0, distributor: 0, new: 0 };
     for (const l of leads) {
@@ -188,37 +162,37 @@ export default function Admin() {
     return c;
   }, [leads, totalCount]);
 
-  async function updateStatus(id: string, status: Enums<"lead_status">) {
+  async function updateStatus(id: string, status: LeadStatus) {
     const previous = leads;
     setLeads((curr) => curr.map((l) => (l.id === id ? { ...l, status } : l)));
-    const { error } = await supabase.from("leads").update({ status }).eq("id", id);
-    if (error) {
+    try {
+      await updateLeadStatus(id, status);
+    } catch (err: unknown) {
       setLeads(previous);
-      toast({ title: "No se pudo actualizar", description: error.message, variant: "destructive" });
+      const message = err instanceof Error ? err.message : "No se pudo actualizar";
+      toast({ title: "No se pudo actualizar", description: message, variant: "destructive" });
     }
   }
 
-  /** Fetch ALL rows matching current filters from the server, in batches of 1000. */
   async function fetchAllFiltered(): Promise<Lead[] | null> {
     const all: Lead[] = [];
     let offset = 0;
-    // Safety cap to avoid runaway exports
-    const MAX_ROWS = 50_000;
-    while (offset < MAX_ROWS) {
-      const base = supabase
-        .from("leads")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .range(offset, offset + EXPORT_BATCH_SIZE - 1);
-      const { data, error } = await applyFilters(base as FilterableLeadsQuery);
-      if (error) {
-        toast({ title: "Error al exportar", description: error.message, variant: "destructive" });
+    const maxRows = 50_000;
+    while (offset < maxRows) {
+      try {
+        const data = await fetchLeads({
+          ...currentFilters(),
+          offset,
+          limit: EXPORT_BATCH_SIZE,
+        });
+        all.push(...data.items);
+        if (!data.hasMore || data.items.length < EXPORT_BATCH_SIZE) break;
+        offset += EXPORT_BATCH_SIZE;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Error al exportar";
+        toast({ title: "Error al exportar", description: message, variant: "destructive" });
         return null;
       }
-      const batch = data ?? [];
-      all.push(...batch);
-      if (batch.length < EXPORT_BATCH_SIZE) break;
-      offset += EXPORT_BATCH_SIZE;
     }
     return all;
   }
@@ -228,13 +202,13 @@ export default function Admin() {
     try {
       const rows = await fetchAllFiltered();
       if (!rows) return;
-      const headers = ["created_at", "type", "status", "name", "email", "organization", "message", "extra"];
+      const headers = ["createdAt", "type", "status", "name", "email", "organization", "message", "extra"];
       const escape = (v: unknown) => {
         const s = v === null || v === undefined ? "" : typeof v === "string" ? v : JSON.stringify(v);
         return `"${s.replace(/"/g, '""')}"`;
       };
       const body = rows.map((l) =>
-        [l.created_at, l.type, l.status, l.name, l.email, l.organization, l.message, l.extra]
+        [l.createdAt, l.type, l.status, l.name, l.email, l.organization, l.message, l.extra]
           .map(escape)
           .join(","),
       );
@@ -264,7 +238,7 @@ export default function Admin() {
       const stampStr = stamp.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" });
 
       doc.setFontSize(16);
-      doc.text("ElectricAutomaticChile — Leads", 40, 40);
+      doc.text("ElectricAutomaticChile - Leads", 40, 40);
       doc.setFontSize(10);
       doc.setTextColor(100);
       const filterParts = [
@@ -273,22 +247,22 @@ export default function Admin() {
         `Estado: ${statusFilter === "all" ? "Todos" : STATUS_LABEL[statusFilter]}`,
         from ? `Desde: ${from}` : null,
         to ? `Hasta: ${to}` : null,
-        debouncedSearch ? `Búsqueda: "${debouncedSearch}"` : null,
+        debouncedSearch ? `Busqueda: "${debouncedSearch}"` : null,
         `Resultados: ${rows.length}`,
       ].filter(Boolean);
-      doc.text(filterParts.join("  ·  "), 40, 58);
+      doc.text(filterParts.join("  |  "), 40, 58);
 
       autoTable(doc, {
         startY: 75,
-        head: [["Fecha", "Tipo", "Estado", "Nombre", "Email", "Organización", "Mensaje"]],
+        head: [["Fecha", "Tipo", "Estado", "Nombre", "Email", "Organizacion", "Mensaje"]],
         body: rows.map((l) => [
-          new Date(l.created_at).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" }),
+          new Date(l.createdAt).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" }),
           TYPE_LABEL[l.type],
           STATUS_LABEL[l.status],
           l.name,
           l.email,
-          l.organization ?? "—",
-          l.message ?? "—",
+          l.organization ?? "-",
+          l.message ?? "-",
         ]),
         styles: { fontSize: 8, cellPadding: 4, overflow: "linebreak" },
         headStyles: { fillColor: [26, 26, 26], textColor: 255 },
@@ -307,7 +281,7 @@ export default function Admin() {
           doc.setFontSize(8);
           doc.setTextColor(150);
           doc.text(
-            `Página ${data.pageNumber} de ${page}`,
+            `Pagina ${data.pageNumber} de ${page}`,
             doc.internal.pageSize.getWidth() - 80,
             doc.internal.pageSize.getHeight() - 20,
           );
@@ -321,10 +295,15 @@ export default function Admin() {
     }
   }
 
+  async function handleSignOut() {
+    await signOut();
+    navigate("/auth", { replace: true });
+  }
+
   if (loading || !isAdmin) {
     return (
       <SiteLayout>
-        <div className="container mx-auto py-24 text-center text-muted-foreground">Cargando…</div>
+        <div className="container mx-auto py-24 text-center text-muted-foreground">Cargando...</div>
       </SiteLayout>
     );
   }
@@ -336,7 +315,7 @@ export default function Admin() {
           <div>
             <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">Panel de leads</h1>
             <p className="text-muted-foreground mt-1">
-              Sesión: <span className="text-foreground">{user?.email}</span>
+              Sesion: <span className="text-foreground">{user?.correo ?? user?.email ?? user?.nombre}</span>
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -344,7 +323,7 @@ export default function Admin() {
               <RefreshCw className={`mr-2 h-4 w-4 ${fetching ? "animate-spin" : ""}`} />
               Actualizar
             </Button>
-            <Button variant="outline" size="sm" onClick={signOut}>
+            <Button variant="outline" size="sm" onClick={handleSignOut}>
               <LogOut className="mr-2 h-4 w-4" />
               Salir
             </Button>
@@ -366,12 +345,12 @@ export default function Admin() {
             <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
               <div className="md:col-span-2">
                 <Input
-                  placeholder="Buscar por nombre, email, organización…"
+                  placeholder="Buscar por nombre, email, organizacion..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
-              <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as LeadType)}>
+              <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as LeadTypeFilter)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Tipo" />
                 </SelectTrigger>
@@ -381,7 +360,7 @@ export default function Admin() {
                   <SelectItem value="distributor">Distribuidora</SelectItem>
                 </SelectContent>
               </Select>
-              <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as LeadStatus)}>
+              <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as LeadStatusFilter)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Estado" />
                 </SelectTrigger>
@@ -439,7 +418,7 @@ export default function Admin() {
                   <TableHead>Tipo</TableHead>
                   <TableHead>Nombre</TableHead>
                   <TableHead>Email</TableHead>
-                  <TableHead>Organización</TableHead>
+                  <TableHead>Organizacion</TableHead>
                   <TableHead>Mensaje</TableHead>
                   <TableHead className="w-[160px]">Estado</TableHead>
                 </TableRow>
@@ -448,14 +427,14 @@ export default function Admin() {
                 {leads.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
-                      {fetching ? "Cargando…" : "Sin resultados con los filtros actuales."}
+                      {fetching ? "Cargando..." : "Sin resultados con los filtros actuales."}
                     </TableCell>
                   </TableRow>
                 )}
                 {leads.map((l) => (
                   <TableRow key={l.id}>
                     <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
-                      {new Date(l.created_at).toLocaleString("es-CL", {
+                      {new Date(l.createdAt).toLocaleString("es-CL", {
                         dateStyle: "short",
                         timeStyle: "short",
                       })}
@@ -471,12 +450,12 @@ export default function Admin() {
                         {l.email}
                       </a>
                     </TableCell>
-                    <TableCell className="text-sm">{l.organization ?? "—"}</TableCell>
+                    <TableCell className="text-sm">{l.organization ?? "-"}</TableCell>
                     <TableCell className="max-w-[280px] truncate text-sm text-muted-foreground" title={l.message ?? undefined}>
-                      {l.message ?? "—"}
+                      {l.message ?? "-"}
                     </TableCell>
                     <TableCell>
-                      <Select value={l.status} onValueChange={(v) => updateStatus(l.id, v as Enums<"lead_status">)}>
+                      <Select value={l.status} onValueChange={(v) => updateStatus(l.id, v as LeadStatus)}>
                         <SelectTrigger className="h-8">
                           <SelectValue>
                             <Badge variant={STATUS_VARIANT[l.status]} className="font-normal">
@@ -505,7 +484,7 @@ export default function Admin() {
             <span className="text-foreground font-medium">{totalCount}</span> leads filtrados
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Por página</span>
+            <span className="text-sm text-muted-foreground">Por pagina</span>
             <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
               <SelectTrigger className="h-9 w-[90px]">
                 <SelectValue />
@@ -521,12 +500,12 @@ export default function Admin() {
               {loadingMore ? (
                 <>
                   <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                  Cargando…
+                  Cargando...
                 </>
               ) : hasMore ? (
-                "Cargar más"
+                "Cargar mas"
               ) : (
-                "No hay más"
+                "No hay mas"
               )}
             </Button>
           </div>

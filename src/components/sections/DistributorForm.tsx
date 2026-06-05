@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { distributorSchema, submitDistributorLead } from "@/lib/forms/leads";
+import { Turnstile } from "@/components/Turnstile";
 
 const meterRanges = [
   "Menos de 1.000",
@@ -26,6 +27,7 @@ export const DistributorForm = () => {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [meters, setMeters] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -40,6 +42,7 @@ export const DistributorForm = () => {
       email: String(fd.get("email") ?? ""),
       meterCount: meters,
       message: String(fd.get("message") ?? ""),
+      turnstileToken,
     };
     const parsed = distributorSchema.safeParse(raw);
     if (!parsed.success) {
@@ -118,6 +121,10 @@ export const DistributorForm = () => {
           maxLength={2000}
           placeholder="Cuéntanos qué problema operativo te gustaría resolver primero."
         />
+      </div>
+      <div className="grid gap-2">
+        <Turnstile onVerify={setTurnstileToken} />
+        {errors.turnstileToken && <p className="text-xs text-destructive">{errors.turnstileToken}</p>}
       </div>
       <Button
         type="submit"

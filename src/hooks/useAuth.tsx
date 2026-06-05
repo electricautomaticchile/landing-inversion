@@ -1,56 +1,65 @@
-import { useEffect, useState } from "react";
-import type { Session, User } from "@supabase/supabase-js";
-import { supabase } from "@/integrations/supabase/client";
+import { useCallback, useEffect, useState } from "react";
+import {
+  type BackendSession,
+  type BackendUser,
+  getCurrentUser,
+  logoutEmpresa,
+} from "@/lib/api/client";
+
+function canAccessLeadAdmin(user: BackendUser | null) {
+  if (!user) return false;
+  const role = user.role?.toLowerCase();
+  return Boolean(
+    role &&
+      [
+        "empresa",
+        "admin",
+        "superadmin",
+        "super_admin",
+        "empresa_admin",
+        "empresa_operador",
+        "empresa_soporte",
+        "empresa_financiero",
+      ].includes(role),
+  );
+}
 
 export function useAuth() {
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [user, setUser] = useState<BackendUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    // Set up listener BEFORE getSession (per Supabase guidance)
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      setUser(newSession?.user ?? null);
-      if (newSession?.user) {
-        // Defer DB read to avoid deadlock
-        setTimeout(() => checkAdmin(newSession.user.id), 0);
-      } else {
-        setIsAdmin(false);
-      }
-    });
-
-    supabase.auth.getSession().then(({ data: { session: existing } }) => {
-      setSession(existing);
-      setUser(existing?.user ?? null);
-      if (existing?.user) {
-        checkAdmin(existing.user.id).finally(() => setLoading(false));
-      } else {
-        setLoading(false);
-      }
-    });
-
-    return () => sub.subscription.unsubscribe();
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const current = await getCurrentUser();
+      setUser(current);
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  async function checkAdmin(userId: string) {
-    const { data, error } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", userId)
-      .eq("role", "admin")
-      .maybeSingle();
-    if (error) {
-      setIsAdmin(false);
-      return;
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const signOut = useCallback(async () => {
+    try {
+      await logoutEmpresa();
+    } finally {
+      setUser(null);
     }
-    setIsAdmin(!!data);
-  }
+  }, []);
 
-  async function signOut() {
-    await supabase.auth.signOut();
-  }
+  const session: BackendSession | null = user ? { user } : null;
 
-  return { session, user, isAdmin, loading, signOut };
+  return {
+    session,
+    user,
+    isAdmin: canAccessLeadAdmin(user),
+    loading,
+    refresh,
+    signOut,
+  };
 }

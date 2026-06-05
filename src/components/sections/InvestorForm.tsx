@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { investorSchema, submitInvestorLead } from "@/lib/forms/leads";
+import { Turnstile } from "@/components/Turnstile";
 
 const tickets = [
   "USD 5K – 10K",
@@ -27,6 +28,7 @@ export const InvestorForm = () => {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [ticket, setTicket] = useState<string>("");
+  const [turnstileToken, setTurnstileToken] = useState("");
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -40,6 +42,7 @@ export const InvestorForm = () => {
       organization: String(fd.get("organization") ?? ""),
       ticket,
       message: String(fd.get("message") ?? ""),
+      turnstileToken,
     };
     const parsed = investorSchema.safeParse(raw);
     if (!parsed.success) {
@@ -109,6 +112,10 @@ export const InvestorForm = () => {
           maxLength={2000}
           placeholder="Cuéntanos brevemente tu tesis o qué te interesa de ElectricAutomaticChile."
         />
+      </div>
+      <div className="grid gap-2">
+        <Turnstile onVerify={setTurnstileToken} />
+        {errors.turnstileToken && <p className="text-xs text-destructive">{errors.turnstileToken}</p>}
       </div>
       <Button
         type="submit"
