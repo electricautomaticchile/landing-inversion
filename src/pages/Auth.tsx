@@ -38,7 +38,9 @@ export default function Auth() {
 
     setBusy(true);
     try {
-      await loginEmpresa(parsed.data);
+      // parsed.data está validado; construimos el payload con tipos garantizados
+      // (zod 3.25 infiere las props como opcionales en safeParse().data).
+      await loginEmpresa({ email: email.trim(), password });
       navigate("/admin", { replace: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Error inesperado";

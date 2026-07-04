@@ -8,10 +8,13 @@ import {
   Cloud,
   Cpu,
   Database,
+  DollarSign,
+  Gauge,
   HardHat,
   Network,
   PhoneCall,
   ShieldCheck,
+  TrendingDown,
   Wifi,
   X,
 } from "lucide-react";
@@ -134,6 +137,45 @@ const packages = [
       "SLA 99.9% + soporte 24/7",
     ],
   },
+];
+
+const amiComparison = [
+  {
+    criterio: "Costo por punto",
+    retrofit: "USD 37–150 por dispositivo",
+    ami: "USD 200–500 por medidor",
+  },
+  {
+    criterio: "Tiempo de despliegue",
+    retrofit: "Inmediato · 30 min por instalación",
+    ami: "3–5 años de recambio masivo",
+  },
+  {
+    criterio: "Infraestructura existente",
+    retrofit: "Se conserva el medidor actual",
+    ami: "Reemplazo total del parque",
+  },
+  {
+    criterio: "Corte y reposición remota",
+    retrofit: "Sí, en segundos",
+    ami: "Según modelo y proveedor",
+  },
+  {
+    criterio: "Lectura de consumo",
+    retrofit: "Cada 30 segundos",
+    ami: "Por intervalos largos",
+  },
+  {
+    criterio: "Inversión inicial (CapEx)",
+    retrofit: "Baja y escalable",
+    ami: "Muy alta y de largo plazo",
+  },
+];
+
+const chilquintaStats = [
+  { value: "89K", label: "Reposiciones/año" },
+  { value: "$2.4M", label: "Ahorro anual (USD)" },
+  { value: ">4x", label: "ROI el primer año" },
 ];
 
 const faqs = [
@@ -289,6 +331,89 @@ const Distributors = () => {
               </tbody>
             </table>
           </div>
+        </Card>
+      </Section>
+
+      {/* Comparativa vs AMI */}
+      <Section title="Retrofit vs. medidores AMI" eyebrow="Comparativa">
+        <Card className="overflow-hidden shadow-card">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <caption className="sr-only">
+                Comparación entre el dispositivo retrofit y los medidores AMI
+              </caption>
+              <thead className="bg-muted text-muted-foreground">
+                <tr>
+                  <th className="text-left px-4 py-3 text-xs uppercase tracking-wider">
+                    Criterio
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs uppercase tracking-wider text-primary">
+                    Retrofit EAC
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs uppercase tracking-wider">
+                    Medidores AMI
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {amiComparison.map((row) => (
+                  <tr key={row.criterio} className="border-t border-border">
+                    <td className="px-4 py-4 font-medium">{row.criterio}</td>
+                    <td className="px-4 py-4">
+                      <Check className="inline h-4 w-4 text-success mr-1" />
+                      {row.retrofit}
+                    </td>
+                    <td className="px-4 py-4 text-muted-foreground">
+                      <X className="inline h-4 w-4 text-destructive mr-1" />
+                      {row.ami}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+        <p className="mt-4 text-xs text-muted-foreground">
+          Obtén los beneficios de la medición inteligente hoy, sin el costo ni
+          los plazos de un recambio total de medidores.
+        </p>
+      </Section>
+
+      {/* Caso de referencia — Chilquinta */}
+      <Section title="El caso de una distribuidora mediana" eyebrow="Impacto cuantificado">
+        <Card className="p-8 md:p-10 shadow-card border-primary/40 ring-1 ring-primary/20">
+          <div className="flex items-center gap-2 text-primary mb-6">
+            <TrendingDown className="h-5 w-5" />
+            <span className="text-xs font-semibold uppercase tracking-widest">
+              Caso de referencia
+            </span>
+          </div>
+          <blockquote className="text-lg md:text-xl font-medium leading-relaxed">
+            Con cerca de{" "}
+            <span className="font-bold">89.000 reposiciones al año</span>,
+            automatizar el corte y la reposición representa un ahorro estimado de{" "}
+            <span className="text-gradient-amber font-bold">
+              ~$2.4M USD anuales
+            </span>{" "}
+            y un ROI superior a 4x en el primer año.
+          </blockquote>
+          <div className="mt-8 grid grid-cols-3 gap-4 border-t border-border pt-6">
+            {chilquintaStats.map((s) => (
+              <div key={s.label} className="text-center">
+                <div className="text-2xl md:text-3xl font-extrabold text-primary">
+                  {s.value}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {s.label}
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="mt-6 text-xs text-muted-foreground">
+            Estimación basada en el volumen operativo público de una
+            distribuidora del tamaño de Chilquinta. Los números reales se
+            modelan para tu parque en la demo.
+          </p>
         </Card>
       </Section>
 
